@@ -1,0 +1,152 @@
+# AeroEval — Project Context & Session History
+
+*Preserved context for the Google FDE L200 Assessment Agent Project.*  
+*Last updated: September 14, 2026*
+
+---
+
+## 1. Project Background & Requirements
+
+- **Program:** Google Cloud Forward Deployed Engineer (FDE) Onboarding — L200 Project.
+- **Curriculum:** "AI in 5 Days" (GEAP / ADK Track).
+- **Core Objective:** Build, test, and publish an enterprise-grade agent to a public GitHub root repository and submit it for evaluation on the [FDE Project Evaluator](https://fde-project-evaluator-510868799189.us-central1.run.app/login).
+- **Evaluation Rubric (Max Score: 95):**
+  1. **Tool & Interface Design:** Strongly typed functions, modular schemas, descriptive docstrings.
+  2. **Context & Memory:** Multi-turn session state management.
+  3. **Orchestration & Logic:** Grounded system instructions, zero hallucinations, structured tool calling.
+  4. **Observability & Tracing:** Health probes, structured logs, and telemetry execution traces.
+  5. **Infrastructure & CI/CD:** Root project layout, Dockerfile, Terraform IaC, and GitHub Actions CI.
+
+---
+
+## 2. Project Concept: AeroEval
+
+**AeroEval** is an intelligent Hardware Test Engineering Telemetry Evaluation Agent built for aerospace, defense, and robotics applications:
+- Test engineers query historical flight test records across drone airframes (`AeroX-1`, `AeroX-2`, `SkyGuardian-Alpha`) and circuit board revisions (`CB-V1.0`, `CB-V2.1-Beta`).
+- The agent inspects sensor telemetry logs (`data/telemetry/*.csv`) and mathematically calculates statistical anomalies ($Z\text{-score} > 2.5\sigma$) without fabricating numbers.
+- Handles multi-turn inquiries (e.g., asking about a drone's vibration anomalies, then following up on what circuit board was used and whether other flights had issues).
+
+---
+
+## 3. Major Architectural & Technical Decisions
+
+### A. Modular Project Layout
+Organized cleanly at the repository root:
+```
+mkarache-l200/
+├── backend/                       # Agent logic, tools, and FastAPI app
+│   ├── __init__.py
+│   ├── agent.py                   # Vertex AI Agent orchestrator (Gemini 3.8 Flash & Claude Sonnet 4.6)
+│   ├── tools.py                   # 3 core ADK Python tools
+│   ├── prompt.py                  # Grounded test engineering instructions & guardrails
+│   ├── memory.py                  # Multi-turn session context store
+│   └── main.py                    # FastAPI server exposing /chat and serving frontend
+├── frontend/                      # Web UI for test engineers
+│   ├── index.html                 # Clean, centered chat window
+│   ├── style.css                  # Dark Google-themed styling
+│   └── app.js                     # Turn-by-turn API interaction & model badge
+├── infra/                         # Infrastructure as Code (Terraform)
+│   ├── main.tf                    # Cloud Run service, Artifact Registry, IAM Service Account
+│   ├── variables.tf               # GCP project ID and region variables
+│   └── outputs.tf                 # Cloud Run URL output
+├── data/                          # Datasets
+│   ├── registry.json              # Master flight test metadata index
+│   └── telemetry/                 # Telemetry CSV time series
+│       ├── flight_101.csv         # Nominal baseline flight (AeroX-1)
+│       ├── flight_102.csv         # Motor vibration anomaly (AeroX-2, CB-V2.1-Beta)
+│       └── flight_103.csv         # Battery thermal runaway spike (SkyGuardian-Alpha)
+├── tests/                         # Test suite
+│   ├── test_tools.py              # Unit tests for the 3 telemetry tools
+│   ├── test_memory.py             # Session state & context retention tests
+│   └── test_api.py                # FastAPI integration tests
+├── .github/workflows/ci.yml       # GitHub Actions automated CI
+├── Dockerfile                     # Cloud Run container definition
+├── requirements.txt               # Pinned dependencies
+├── pyproject.toml                 # Build configuration
+└── README.md                      # Architecture documentation & rubric mapping
+```
+
+---
+
+### B. Pure IAM & Vertex AI Backend (Zero API Keys)
+- **Unified Under Google Cloud Project:** `onboardingproject-507522`.
+- **Local Authentication:** Uses standard Google Application Default Credentials (ADC) via:
+  ```bash
+  gcloud auth application-default login
+  ```
+- **Cloud Run Authentication:** Uses an attached dedicated IAM Service Account (`aeroeval-agent-sa`) granted `roles/aiplatform.user`.
+- **Corporate Workstation mTLS Fix:** On corp machines, disabled mTLS client cert loading via:
+  ```ini
+  GOOGLE_API_USE_CLIENT_CERTIFICATE=false
+  GOOGLE_API_USE_MTLS_ENDPOINT=never
+  ```
+- **Gemini 3.8 Flash Location:** Configured to `VERTEX_LOCATION=global` on the Gemini Enterprise Agent Platform.
+- **Multi-Model Toggling:** Configured support for both **Gemini 3.8 Flash** (`gemini-3.8-flash`) and **Anthropic Claude Sonnet 4.6** (`claude-4-6-sonnet` via Vertex AI Model Garden).
+
+---
+
+### C. The 2 Focused ADK Python Tools (`backend/tools.py`)
+1. **`query_flight_metadata(drone_id, board_type, date, registry_path)`**:
+   Queries the database / master registry (from Google Cloud Storage `gs://` or local `data/registry.json`) using target hardware constraints (`drone_id`, `board_type`, `date`) and returns matching test IDs and file paths.
+2. **`detect_telemetry_anomalies(file_path, metric, threshold)`**:
+   Opens a specific telemetry CSV file (streaming directly from GCS or local disk), computes statistical anomalies (Z-score / IQR) for sensor metrics (e.g. `Motor_Vibration_g`, `Battery_Temp_C`, `Voltage_V`), and returns a concise JSON summary of flagged timestamps and values. Keeps bulky raw data out of the LLM context.
+*(Note: Telemetry datasets can be stored in Google Cloud Storage `gs://onboardingproject-507522-aeroeval-data`, decoupling data storage from container builds).*
+
+---
+
+### D. Context & Multi-Turn Memory Architecture (`backend/memory.py`)
+- **Native Gemini Multi-Turn History:** Prior completed conversation turns are serialized into `google.genai.types.Content(role="user"|"model", ...)` and injected directly into `client.chats.create(history=...)`.
+- **Native Claude Multi-Turn History:** Converted via `to_anthropic_messages()` and passed directly into `client.messages.create(messages=...)`.
+- **Dual-Layer Persistence:**
+  1. In-memory dictionary cache for sub-millisecond local retrieval.
+  2. Cloud Firestore integration (`google.cloud.firestore`) persisting full conversational state and active hardware entities (`aeroeval_sessions` collection).
+- **Infrastructure as Code:** Declared in `infra/main.tf` (`google_firestore_database` in `FIRESTORE_NATIVE` mode, with `roles/datastore.user` IAM role).
+
+---
+
+### E. Observability & Tracing Architecture (`backend/telemetry.py`)
+- **Structured Cloud Logging Telemetry:** After every conversation turn, AeroEval compiles and prints a unified structured JSON packet to `stdout` for automatic Google Cloud Run & Cloud Logging ingestion.
+- **ADK Callback Interception:**
+  - `@telemetry_logger.on_thought`: Captures internal reasoning or intent prior to execution.
+  - `@telemetry_logger.on_tool_call`: Captures exact tool initiation with sanitized input arguments.
+  - `@telemetry_logger.on_tool_response`: Captures tool completion with execution latency (`latency_sec`) and response summary.
+- **Trace Waterfall:** Step-by-step array of timestamps and step payloads alongside turn-level metrics (`total_latency_sec`, `step_count`, `severity`, `session_id`, `model_name`).
+
+---
+
+## 4. Current State & Verification
+
+1. **Live Vertex AI Verification with Gemini 3.8 Flash:**
+   Executed live query against `onboardingproject-507522` in `global`:
+   - Prompt: *"Were there any motor vibration anomalies on AeroX-2?"*
+   - Gemini 3.8 Flash autonomously invoked metadata discovery and anomaly detection.
+   - Correctly flagged vibration anomalies on `flight_102` at `14:15:00Z` (2.15g) and `14:16:00Z` (1.94g).
+
+2. **Live Firestore Session & History Persistence (`aeroeval` Database):**
+   - Verified active multi-turn sessions logging directly into Firestore collection `aeroeval_sessions`.
+   - Each session document retains full turn-by-turn conversational history (`user` and `model` roles) and hardware state tracking across requests.
+
+3. **Live Structured Tracing & Telemetry:**
+   - Real-time telemetry emission on turn completion with full trace waterfall (`reasoning_thought`, `tool_call_initiated`, `tool_call_completed`) and metrics.
+
+---
+
+## 5. How to Run Locally
+
+```bash
+# 1. Authenticate with GCP ADC (if not already done)
+gcloud auth application-default login
+
+# 2. Launch the server (serves both API and Frontend)
+python3 -m backend.main
+```
+Open **[http://localhost:8080](http://localhost:8080)** to chat with the live agent.
+
+---
+
+## 6. Next Steps for Submission
+1. Push repository to a public GitHub project root.
+2. Deploy the container to Cloud Run using Terraform (`infra/main.tf`) or `gcloud run deploy`.
+3. Submit the public Git URL to the [FDE Project Evaluator](https://fde-project-evaluator-510868799189.us-central1.run.app/login).
+4. (Optional) Record a 3-minute video walkthrough demonstrating the architecture, code, and live UI demo.
+

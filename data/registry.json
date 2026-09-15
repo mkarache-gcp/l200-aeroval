@@ -1,0 +1,30 @@
+[
+  {
+    "test_id": "flight_101",
+    "drone_id": "AeroX-2",
+    "circuit_board": "CB-V1.0",
+    "test_date": "2026-09-10",
+    "status": "Completed",
+    "notes": "Baseline nominal hover test in mild conditions.",
+    "file_path": "data/telemetry/flight_101.csv"
+  },
+  {
+    "test_id": "flight_102",
+    "drone_id": "AeroX-2",
+    "circuit_board": "CB-V2.1-Beta",
+    "test_date": "2026-09-12",
+    "status": "Completed",
+    "notes": "High-altitude maneuver test; motor vibration spike reported.",
+    "file_path": "data/telemetry/flight_102.csv"
+  },
+  {
+    "test_id": "flight_103",
+    "drone_id": "SkyGuardian-Alpha",
+    "circuit_board": "CB-V2.1-Beta",
+    "test_date": "2026-09-13",
+    "status": "Completed",
+    "notes": "Endurance test with high payload weight; thermal monitoring.",
+    "file_path": "data/telemetry/flight_103.csv"
+  }
+]
+

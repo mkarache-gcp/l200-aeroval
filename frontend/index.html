@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AeroEval — Hardware Telemetry Chat</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="chat-container">
+    <header class="chat-header">
+      <div class="title-group">
+        <span class="status-dot"></span>
+        <h1>🛰️ AeroEval</h1>
+      </div>
+      <div class="header-actions">
+        <label for="provider-select" class="provider-label">Model:</label>
+        <select id="provider-select" class="provider-dropdown">
+          <option value="gemini">Gemini 3.8 Flash</option>
+          <option value="anthropic">Claude Sonnet 4.7</option>
+        </select>
+      </div>
+    </header>
+
+    <div id="messages" class="messages-area">
+      <div class="message assistant">
+        <div class="bubble">
+          <strong>AeroEval:</strong> Welcome! I am your test engineering assistant. Ask me about flight test results, drone models (like <em>AeroX-1</em> or <em>AeroX-2</em>), or sensor anomalies.
+        </div>
+      </div>
+    </div>
+
+    <form id="chat-form" class="input-form">
+      <input
+        type="text"
+        id="chat-input"
+        placeholder="Type a message (e.g. 'Were there any vibration anomalies on AeroX-2?')"
+        autocomplete="off"
+        autofocus
+      />
+      <button type="submit" id="send-button">Send</button>
+    </form>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
