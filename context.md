@@ -113,12 +113,26 @@ mkarache-l200/
 ---
 
 ### E. Observability & Tracing Architecture (`backend/telemetry.py`)
-- **Structured Cloud Logging Telemetry:** After every conversation turn, AeroEval compiles and prints a unified structured JSON packet to `stdout` for automatic Google Cloud Run & Cloud Logging ingestion.
-- **ADK Callback Interception:**
-  - `@telemetry_logger.on_thought`: Captures internal reasoning or intent prior to execution.
-  - `@telemetry_logger.on_tool_call`: Captures exact tool initiation with sanitized input arguments.
-  - `@telemetry_logger.on_tool_response`: Captures tool completion with execution latency (`latency_sec`) and response summary.
-- **Trace Waterfall:** Step-by-step array of timestamps and step payloads alongside turn-level metrics (`total_latency_sec`, `step_count`, `severity`, `session_id`, `model_name`).
+- **OpenTelemetry SDK Integration:** Uses `opentelemetry.trace` to provide standard distributed tracing across the agent conversation lifecycle.
+- **W3C Standards-Compliant Distributed Tracing:**
+  - `trace_id`: 32-character hexadecimal string (128-bit) representing the entire conversation turn.
+  - `span_id`: 16-character hexadecimal string (64-bit) representing the root turn span.
+  - `parent_span_id`: 16-character hexadecimal string linking child spans back to the parent span.
+- **Distributed Span Linking in Trace Waterfall:**
+  - Each waterfall step (`reasoning_thought`, `tool_call_initiated`, `tool_call_completed`) is recorded as a linked child span containing its own unique `span_id` and explicit `parent_span_id` pointing to the root turn.
+- **Google Cloud Trace & Cloud Logging Automatic Correlation:**
+  - Emitted structured JSON log includes:
+    - `logging.googleapis.com/trace`: `projects/{project_id}/traces/{trace_id}`
+    - `logging.googleapis.com/spanId`: `{span_id}`
+    - `logging.googleapis.com/trace_sampled`: `true`
+  - Allows seamless log-to-trace correlation in the Google Cloud Console.
+- **Enterprise PII Redaction via Google Cloud Sensitive Data Protection (SDP / DLP) API:**
+  - Integrated `google.cloud.dlp_v2` (`DlpServiceClient.deidentify_content`) directly inside the trace accumulator.
+  - Automatically detects and scrubs sensitive InfoTypes (`PERSON_NAME`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, `US_SOCIAL_SECURITY_NUMBER`, `CREDIT_CARD_NUMBER`, `PASSPORT`, `AUTH_TOKEN`) using Google Cloud's enterprise ML scanning models.
+  - Recursively scrubs incoming user queries, model responses, and nested tool waterfall payloads before telemetry emission.
+  - Cloud Run Service Account granted `roles/dlp.user` in `infra/main.tf`.
+- **ADK Callback & Decorator Interception:**
+  - `@traced_tool`: Wraps ADK tools with OpenTelemetry spans (`tracer.start_as_current_span`) and captures execution metrics.
 
 ---
 

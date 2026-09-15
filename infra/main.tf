@@ -48,6 +48,13 @@ resource "google_project_iam_member" "storage_viewer" {
   member  = "serviceAccount:${google_service_account.aeroeval_sa.email}"
 }
 
+# Grant Sensitive Data Protection (DLP) User role to the Service Account for PII redaction
+resource "google_project_iam_member" "dlp_user" {
+  project = var.project_id
+  role    = "roles/dlp.user"
+  member  = "serviceAccount:${google_service_account.aeroeval_sa.email}"
+}
+
 # Google Cloud Storage Bucket for Telemetry Data
 resource "google_storage_bucket" "telemetry_bucket" {
   name                        = var.gcs_bucket_name
