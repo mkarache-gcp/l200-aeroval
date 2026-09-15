@@ -8,12 +8,13 @@ supporting Gemini 3.8 Flash & Anthropic Claude toggling.
 import os
 import uvicorn
 from typing import Optional
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.agent import create_agent
+from backend.memory import session_store
 
 # Initialize the AeroEval Agent
 agent = create_agent()
@@ -54,10 +55,19 @@ def healthz():
 
 
 @app.post("/chat", response_model=ChatResponse)
-def handle_chat(req: ChatRequest) -> ChatResponse:
-    """Single chat endpoint: accepts user message and provider, routes to agent, returns response."""
+async def handle_chat(req: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
+    """Single chat endpoint: routes to agent and persists memory asynchronously via BackgroundTasks.
+
+    Prevents UI blocking by returning the response immediately while Firestore persistence executes
+    out-of-band as a background task.
+    """
     chosen_provider = req.provider or agent.default_provider
     reply = agent.chat(message=req.message, session_id=req.session_id, provider=chosen_provider)
+
+    # Asynchronous memory persistence via FastAPI BackgroundTasks to eliminate UI blocking
+    session = session_store.get_or_create(req.session_id)
+    background_tasks.add_task(session.save)
+
     return ChatResponse(response=reply, session_id=req.session_id, provider=chosen_provider)
 
 

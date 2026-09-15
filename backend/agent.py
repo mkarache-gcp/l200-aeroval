@@ -8,6 +8,7 @@ Routes ALL model calls exclusively through Google Cloud Vertex AI:
 No third-party API keys required; authentication is unified under GCP IAM & ADC.
 """
 
+import asyncio
 import os
 import json
 import logging
@@ -28,7 +29,7 @@ try:
 except ImportError:
     pass
 
-from backend.memory import session_store
+from backend.memory import SessionStore, session_store
 from backend.prompt import AEROEVAL_SYSTEM_INSTRUCTION
 from backend.telemetry import telemetry_logger
 from backend.tools import (
@@ -125,6 +126,15 @@ class AeroEvalAgent:
             return self._call_claude_vertex(message, session, trace)
         return self._call_gemini_vertex(message, session, trace)
 
+    async def chat_async(
+        self,
+        message: str,
+        session_id: str = "default-session",
+        provider: Optional[str] = None,
+    ) -> str:
+        """Asynchronously processes a chat message in a worker thread to prevent event loop blocking."""
+        return await asyncio.to_thread(self.chat, message, session_id, provider)
+
     def _call_gemini_vertex(self, message: str, session, trace) -> str:
         """Invokes Gemini 3.8 Flash through Vertex AI with native conversation history."""
         if not self._has_gcp_auth():
@@ -140,7 +150,7 @@ class AeroEvalAgent:
                 location=self.location,
             )
 
-            # Retrieve prior conversation turns formatted for Gemini
+            # Retrieve prior conversation turns formatted for Gemini (compacted if exceeding threshold)
             genai_history = session.to_genai_history()
 
             chat_session = client.chats.create(
@@ -155,10 +165,10 @@ class AeroEvalAgent:
             res = chat_session.send_message(message)
             reply = res.text or "Analysis completed."
             
-            # Persist turns in session and Firestore
+            # Persist turns in session and asynchronously persist to Firestore
             session.add_message(role="user", content=message)
             session.add_message(role="model", content=reply)
-            session_store.save(session)
+            session.save_in_background()
 
             if not trace.trace_waterfall:
                 trace.on_thought("Formulating direct engineering response to user query.")
@@ -232,7 +242,7 @@ class AeroEvalAgent:
             reply = "\n".join(text_blocks) or "Analysis completed."
             session.add_message(role="user", content=message)
             session.add_message(role="assistant", content=reply)
-            session_store.save(session)
+            session.save_in_background()
 
             if not trace.trace_waterfall:
                 trace.on_thought("Formulating direct engineering response to user query.")
@@ -330,7 +340,7 @@ class AeroEvalAgent:
 
         session.add_message(role="user", content=message)
         session.add_message(role="assistant", content=response)
-        session_store.save(session)
+        session.save_in_background()
 
         if not trace.trace_waterfall:
             trace.on_thought(f"Handling inquiry via local {provider} engine.")

@@ -95,8 +95,16 @@ mkarache-l200/
 ---
 
 ### D. Context & Multi-Turn Memory Architecture (`backend/memory.py`)
-- **Native Gemini Multi-Turn History:** Prior completed conversation turns are serialized into `google.genai.types.Content(role="user"|"model", ...)` and injected directly into `client.chats.create(history=...)`.
-- **Native Claude Multi-Turn History:** Converted via `to_anthropic_messages()` and passed directly into `client.messages.create(messages=...)`.
+- **Unified SessionStore & Backwards Compatibility:** `SessionStore` merges session state modeling and storage management into a single class with `SessionState = SessionStore` alias for full backwards compatibility.
+- **Automated History Compaction & Context Truncation:**
+  - Configurable threshold (`MAX_HISTORY_TURNS=10`, `RETAIN_RECENT_TURNS=4`).
+  - When history exceeds threshold, older turns are distilled into a structured engineering summary turn (`[Session Context Summary: ...]`) + model acknowledgment, preserving prior inquiries and findings.
+  - Active hardware context (`active_drone_id`, `active_board_type`, `active_test_id`, `last_file_path`) is permanently tracked and never lost during compaction.
+  - Strict alternating turn order (`user` -> `model` -> `user` -> `model`) ensures compatibility with Gemini `client.chats.create(history=...)` and Anthropic Claude.
+  - `truncate_context(max_turns=...)` provides sliding-window truncation.
+- **Non-Blocking Asynchronous Persistence:**
+  - FastAPI `/chat` endpoint uses `BackgroundTasks` (`background_tasks.add_task(session.save)`) so HTTP responses return immediately without waiting for database I/O.
+  - `SessionStore` provides `save_async()` (using `asyncio.to_thread`) and `save_in_background()` (using a dedicated `ThreadPoolExecutor`) to eliminate UI blocking.
 - **Dual-Layer Persistence:**
   1. In-memory dictionary cache for sub-millisecond local retrieval.
   2. Cloud Firestore integration (`google.cloud.firestore`) persisting full conversational state and active hardware entities (`aeroeval_sessions` collection).
