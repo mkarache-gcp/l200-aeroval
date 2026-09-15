@@ -137,9 +137,6 @@ class AeroEvalAgent:
 
     def _call_gemini_vertex(self, message: str, session, trace) -> str:
         """Invokes Gemini 3.8 Flash through Vertex AI with native conversation history."""
-        if not self._has_gcp_auth():
-            return self._local_fallback(message, session, trace, provider="Vertex AI (Gemini)")
-
         try:
             from google import genai
             from google.genai import types
@@ -185,9 +182,6 @@ class AeroEvalAgent:
 
     def _call_claude_vertex(self, message: str, session, trace) -> str:
         """Invokes Anthropic Claude through Vertex AI Model Garden with conversation history."""
-        if not self._has_gcp_auth():
-            return self._local_fallback(message, session, trace, provider="Vertex AI (Claude)")
-
         try:
             from anthropic import AnthropicVertex
 
@@ -260,92 +254,6 @@ class AeroEvalAgent:
             )
             trace.emit(err_msg, severity="ERROR")
             return err_msg
-
-    def _has_gcp_auth(self) -> bool:
-        """Checks whether GCP credentials or IAM environment are configured."""
-        # 1. Local Service Account key file
-        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-        if cred_path and os.path.exists(cred_path):
-            return True
-        # 2. Local gcloud ADC file (~/.config/gcloud/application_default_credentials.json)
-        adc_path = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-        if os.path.exists(adc_path):
-            return True
-        # 3. Google Cloud Run / App Engine container runtime (uses attached IAM Service Account)
-        if os.getenv("K_SERVICE") or os.getenv("GAE_SERVICE"):
-            return True
-        return False
-
-    def _local_fallback(self, message: str, session, trace, provider: str) -> str:
-        """Deterministic local router used when GCP credentials are not yet configured."""
-        msg = message.strip().lower()
-
-        if "aerox-1" in msg or "aerox 1" in msg:
-            session.update_context(drone_id="AeroX-1", test_id="flight_101", board_type="CB-V1.0")
-            matches = query_flight_metadata(drone_id="AeroX-1")
-            flight = matches[0] if matches else {}
-            response = (
-                f"[{provider} Simulation] Flight **{flight.get('test_id', 'flight_101')}** for **AeroX-1** "
-                f"used circuit board **{flight.get('circuit_board', 'CB-V1.0')}**. "
-                f"Status: {flight.get('status', 'Completed')}. Telemetry log: `{flight.get('file_path')}`."
-            )
-
-        elif "aerox-2" in msg or "aerox 2" in msg:
-            session.update_context(drone_id="AeroX-2", test_id="flight_102", board_type="CB-V2.1-Beta")
-            anomalies = detect_telemetry_anomalies("data/telemetry/flight_102.csv", "Motor_Vibration_g")
-            count = anomalies.get("anomaly_count", 0)
-            max_val = anomalies.get("max", 0.0)
-            response = (
-                f"⚠️ [{provider} Simulation] **AeroX-2 (flight_102)**: Detected **{count} motor vibration anomalies** exceeding threshold! "
-                f"Peak vibration reached **{max_val}g** (mean baseline: {anomalies.get('mean', 0.0)}g). "
-                f"Board revision was `{session.active_board_type}`."
-            )
-
-        elif "skyguardian" in msg:
-            session.update_context(drone_id="SkyGuardian-Alpha", test_id="flight_103", board_type="CB-V2.1-Beta")
-            anomalies = detect_telemetry_anomalies("data/telemetry/flight_103.csv", "Battery_Temp_C", threshold=1.8)
-            count = anomalies.get("anomaly_count", 0)
-            max_temp = anomalies.get("max", 0.0)
-            response = (
-                f"🔥 [{provider} Simulation] **SkyGuardian-Alpha (flight_103)**: Detected **{count} battery thermal anomalies**! "
-                f"Peak battery temperature reached **{max_temp}°C**. "
-                f"This flight also used board `{session.active_board_type}`."
-            )
-
-        elif "circuit board" in msg or "board" in msg:
-            if session.active_board_type:
-                matches = query_flight_metadata(board_type=session.active_board_type)
-                drones = [m.get("drone_id") for m in matches]
-                response = (
-                    f"[{provider} Simulation] Active board revision **{session.active_board_type}** was tested on flights: "
-                    f"{', '.join(drones)}. Both experienced performance anomalies."
-                )
-            else:
-                matches = query_flight_metadata()
-                boards = set(m.get("circuit_board") for m in matches if "circuit_board" in m)
-                response = f"[{provider} Simulation] Known circuit board revisions in registry: {', '.join(sorted(boards))}."
-
-        else:
-            response = (
-                f"Hello, I am AeroEval. Currently running in local simulation mode for **{provider}**.\n\n"
-                f"To connect live to **Google Cloud Vertex AI** (Project: `{self.project_id}`):\n"
-                "1. Add your GCP Service Account JSON key to `.env`:\n"
-                "   `GOOGLE_APPLICATION_CREDENTIALS=gcp_credentials.json`\n"
-                "   OR authenticate with: `gcloud auth application-default login`\n\n"
-                "In simulation mode, you can query:\n"
-                "- *'Were there any motor vibration anomalies on AeroX-2?'*\n"
-                "- *'Show tests for AeroX-1'*\n"
-                "- *'What circuit board was used?'*"
-            )
-
-        session.add_message(role="user", content=message)
-        session.add_message(role="assistant", content=response)
-        session.save_in_background()
-
-        if not trace.trace_waterfall:
-            trace.on_thought(f"Handling inquiry via local {provider} engine.")
-        trace.emit(response)
-        return response
 
 
 def create_agent() -> AeroEvalAgent:

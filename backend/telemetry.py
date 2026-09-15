@@ -1,13 +1,14 @@
 """
-Observability, OpenTelemetry Distributed Tracing, and Cloud SDP PII Redaction for AeroEval.
+Observability, OpenTelemetry Distributed Tracing, and PII Redaction for AeroEval.
 
 Provides structured Cloud Logging telemetry for every conversation turn, conforming
 to the OpenTelemetry and W3C Trace Context specifications:
+- Standard OpenTelemetry SDK TracerProvider and Tracer
 - 32-character hexadecimal trace_id (128-bit)
 - 16-character hexadecimal span_id (64-bit)
 - parent_span_id linking child spans (reasoning thoughts, tool calls) to the root turn
 - Google Cloud Trace correlation fields (logging.googleapis.com/trace, logging.googleapis.com/spanId)
-- Enterprise-grade PII scanning & scrubbing via Google Cloud Sensitive Data Protection (SDP / DLP) API
+- Automated regex-based PII redaction executed directly on the telemetry payload right before printing
 """
 
 from contextvars import ContextVar
@@ -17,6 +18,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -24,111 +26,20 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenTelemetry Tracer
+# -----------------------------------------------------------------------------
+# Standard OpenTelemetry SDK Initialization
+# -----------------------------------------------------------------------------
 try:
-    from opentelemetry import trace as otel_trace
-    tracer = otel_trace.get_tracer("aeroeval", "1.0.0")
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    current_provider = trace.get_tracer_provider()
+    if not isinstance(current_provider, TracerProvider):
+        trace.set_tracer_provider(TracerProvider())
+    tracer = trace.get_tracer("aeroeval", "1.0.0")
 except Exception as e:
     logger.debug(f"OpenTelemetry SDK tracer fallback to internal ID generator: {e}")
     tracer = None
-
-# Initialize Google Cloud Sensitive Data Protection (DLP API)
-try:
-    from google.cloud import dlp_v2
-except ImportError:
-    dlp_v2 = None
-
-
-class SDPRedactor:
-    """Google Cloud Sensitive Data Protection (SDP / DLP) API PII Redactor.
-
-    Calls Google Cloud's machine-learning-powered Sensitive Data Protection API
-    (DlpServiceClient.deidentify_content) to detect and redact sensitive InfoTypes
-    (names, emails, phone numbers, SSNs, credit cards, passport numbers, auth tokens).
-    """
-
-    DEFAULT_INFOTYPES = [
-        {"name": "EMAIL_ADDRESS"},
-        {"name": "PHONE_NUMBER"},
-        {"name": "PERSON_NAME"},
-        {"name": "US_SOCIAL_SECURITY_NUMBER"},
-        {"name": "CREDIT_CARD_NUMBER"},
-        {"name": "PASSPORT"},
-        {"name": "AUTH_TOKEN"},
-    ]
-
-    def __init__(self, project_id: Optional[str] = None, client: Optional[Any] = None):
-        self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "onboardingproject-507522")
-        self.client = client
-        if self.client is None:
-            self._init_client()
-
-    def _init_client(self) -> None:
-        """Initializes the DlpServiceClient."""
-        if dlp_v2 is None:
-            logger.warning("google-cloud-dlp library is not installed. PII redaction disabled.")
-            return
-
-        try:
-            self.client = dlp_v2.DlpServiceClient()
-            logger.info(f"Connected to Google Cloud Sensitive Data Protection (SDP) for project '{self.project_id}'.")
-        except Exception as e:
-            logger.warning(f"Failed to connect to Cloud SDP API: {e}. Telemetry will proceed without redaction.")
-            self.client = None
-
-    def redact_text(self, text: str) -> str:
-        """Calls Google Cloud Sensitive Data Protection API to redact sensitive PII in text."""
-        if not text or not isinstance(text, str) or not self.client:
-            return text
-
-        if len(text.strip()) == 0:
-            return text
-
-        parent = f"projects/{self.project_id}"
-        inspect_config = {
-            "info_types": self.DEFAULT_INFOTYPES,
-            "min_likelihood": dlp_v2.Likelihood.LIKELIHOOD_UNSPECIFIED,
-        }
-        deidentify_config = {
-            "info_type_transformations": {
-                "transformations": [
-                    {
-                        "primitive_transformation": {
-                            "replace_with_info_type_config": {}
-                        }
-                    }
-                ]
-            }
-        }
-        item = {"value": text}
-
-        try:
-            response = self.client.deidentify_content(
-                request={
-                    "parent": parent,
-                    "deidentify_config": deidentify_config,
-                    "inspect_config": inspect_config,
-                    "item": item,
-                }
-            )
-            return response.item.value
-        except Exception as e:
-            logger.warning(f"Cloud SDP deidentify_content API call failed: {e}")
-            return text
-
-    def redact_payload(self, data: Any) -> Any:
-        """Recursively sanitizes nested dictionaries, lists, and strings using Cloud SDP API."""
-        if isinstance(data, str):
-            return self.redact_text(data)
-        elif isinstance(data, dict):
-            return {k: self.redact_payload(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self.redact_payload(item) for item in data]
-        return data
-
-
-# Global singleton instance of Cloud SDP PII Redactor
-sdp_redactor = SDPRedactor()
 
 
 def generate_trace_id() -> str:
@@ -139,6 +50,72 @@ def generate_trace_id() -> str:
 def generate_span_id() -> str:
     """Generates a 16-character hexadecimal W3C/OpenTelemetry-compliant span ID (64-bit)."""
     return os.urandom(8).hex()
+
+
+# -----------------------------------------------------------------------------
+# PII Redaction Engine (Regex Sanitization Directly Before Printing)
+# -----------------------------------------------------------------------------
+
+def redact_pii(text: str) -> str:
+    """Sanitizes sensitive Personally Identifiable Information (PII) using regex patterns.
+
+    Applied directly to all string fields right before printing the log to stdout.
+    Redacts:
+    - Email addresses: user@example.com, alice.smith@corp.internal -> [REDACTED_EMAIL]
+    - Phone numbers: (555) 123-4567, 555-123-4567, +1 415-555-2671 -> [REDACTED_PHONE]
+    - US Social Security Numbers: 123-45-6789 -> [REDACTED_SSN]
+    - Credit Card numbers: 4111-2222-3333-4444 -> [REDACTED_CREDIT_CARD]
+    - API keys and tokens: Bearer ... / api_key=... -> [REDACTED_API_KEY]
+    """
+    if not text or not isinstance(text, str):
+        return text
+
+    # 1. Email addresses (supports standard and internal domains)
+    text = re.sub(
+        r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b',
+        '[REDACTED_EMAIL]',
+        text,
+    )
+
+    # 2. Phone numbers (requires formatting separators like hyphens, dots, spaces, parentheses)
+    text = re.sub(
+        r'(?:\+?1[-.\s]?)?\(?\b[0-9]{3}\)?[-.\s][0-9]{3}[-.\s][0-9]{4}\b',
+        '[REDACTED_PHONE]',
+        text,
+    )
+
+    # 3. US Social Security Numbers (SSN: ###-##-####)
+    text = re.sub(
+        r'\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b',
+        '[REDACTED_SSN]',
+        text,
+    )
+
+    # 4. Credit Card Numbers (16 digits with spaces or hyphens)
+    text = re.sub(
+        r'\b(?:\d{4}[-\s]){3}\d{4}\b',
+        '[REDACTED_CREDIT_CARD]',
+        text,
+    )
+
+    # 5. Bearer tokens, secrets, API keys
+    text = re.sub(
+        r'(?i)(?:bearer\s+[a-zA-Z0-9_\-\.]{16,}|api[_-]?key[\s:=]+[\'\"]?[a-zA-Z0-9_\-]{16,}[\'\"]?)',
+        '[REDACTED_API_KEY]',
+        text,
+    )
+    return text
+
+
+def redact_payload(data: Any) -> Any:
+    """Recursively traverses dictionaries, lists, and strings, sanitizing all PII via regex."""
+    if isinstance(data, str):
+        return redact_pii(data)
+    elif isinstance(data, dict):
+        return {k: redact_payload(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [redact_payload(item) for item in data]
+    return data
 
 
 # Context-local active trace collector
@@ -173,7 +150,6 @@ class TraceCollector:
         """Records an agent reasoning thought as an OpenTelemetry child span linked to root span."""
         if not thought:
             return ""
-        clean_thought = sdp_redactor.redact_text(str(thought).strip())
         child_span_id = thought_span_id or generate_span_id()
         self.trace_waterfall.append({
             "trace_id": self.trace_id,
@@ -182,7 +158,7 @@ class TraceCollector:
             "timestamp": round(time.time(), 3),
             "step_type": "reasoning_thought",
             "payload": {
-                "thought": clean_thought,
+                "thought": str(thought).strip(),
             },
         })
         return child_span_id
@@ -195,7 +171,6 @@ class TraceCollector:
     ) -> str:
         """Records a tool call initiation as an OpenTelemetry child span linked to root span."""
         clean_args = {k: v for k, v in arguments.items() if v is not None}
-        scrubbed_args = sdp_redactor.redact_payload(clean_args)
         child_span_id = tool_span_id or generate_span_id()
         self.trace_waterfall.append({
             "trace_id": self.trace_id,
@@ -205,7 +180,7 @@ class TraceCollector:
             "step_type": "tool_call_initiated",
             "payload": {
                 "tool_name": tool_name,
-                "arguments": scrubbed_args,
+                "arguments": clean_args,
             },
         })
         return child_span_id
@@ -225,7 +200,6 @@ class TraceCollector:
         else:
             summary = str(response)[:500]
 
-        scrubbed_summary = sdp_redactor.redact_payload(summary)
         child_span_id = tool_span_id or generate_span_id()
         self.trace_waterfall.append({
             "trace_id": self.trace_id,
@@ -236,19 +210,14 @@ class TraceCollector:
             "payload": {
                 "tool_name": tool_name,
                 "latency_sec": round(latency_sec, 3),
-                "response_summary": scrubbed_summary,
+                "response_summary": summary,
             },
         })
 
     def emit(self, agent_response: str, severity: str = "INFO") -> Dict[str, Any]:
-        """Assembles OpenTelemetry-compliant structured log, sanitizes PII with Cloud SDP, and prints to stdout."""
+        """Assembles OpenTelemetry-compliant structured log, scrubs PII via regex, and prints to stdout."""
         total_latency = round(time.time() - self.start_time, 3)
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-        # Sanitize user query, model response, and nested trace waterfall using Google Cloud SDP API
-        sanitized_query = sdp_redactor.redact_text(self.user_query)
-        sanitized_response = sdp_redactor.redact_text(agent_response)
-        sanitized_waterfall = sdp_redactor.redact_payload(self.trace_waterfall)
 
         telemetry_log = {
             "timestamp": now_iso,
@@ -261,22 +230,26 @@ class TraceCollector:
             "logging.googleapis.com/trace": f"projects/{self.project_id}/traces/{self.trace_id}",
             "logging.googleapis.com/spanId": self.span_id,
             "logging.googleapis.com/trace_sampled": True,
-            # Session & Query Context (Scrubbed with Cloud SDP)
+            # Session & Query Context
             "session_id": self.session_id,
             "model_name": self.model_name,
-            "user_query": sanitized_query,
-            "agent_response": sanitized_response,
+            "user_query": self.user_query,
+            "agent_response": agent_response,
             "metrics": {
                 "total_latency_sec": total_latency,
-                "step_count": len(sanitized_waterfall),
+                "step_count": len(self.trace_waterfall),
             },
             # Linked Child Spans (waterfall)
-            "trace_waterfall": sanitized_waterfall,
+            "trace_waterfall": self.trace_waterfall,
         }
 
+        # Apply regex PII redaction directly to payload right before printing
+        sanitized_log = redact_payload(telemetry_log)
+        formatted_json_str = json.dumps(sanitized_log, indent=2)
+
         # Print directly as formatted JSON to stdout for Google Cloud Run / Cloud Logging
-        print(json.dumps(telemetry_log, indent=2), file=sys.stdout, flush=True)
-        return telemetry_log
+        print(formatted_json_str, file=sys.stdout, flush=True)
+        return sanitized_log
 
 
 class TelemetryLogger:
@@ -339,7 +312,7 @@ def traced_tool(func: Callable) -> Callable:
 
         tool_span_id = generate_span_id()
 
-        # If OpenTelemetry tracer is active, wrap in a real OTEL span
+        # If OpenTelemetry tracer is active, wrap in a real OpenTelemetry span
         if tracer:
             with tracer.start_as_current_span(
                 f"aeroeval.tool.{func.__name__}",

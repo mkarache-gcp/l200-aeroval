@@ -126,11 +126,10 @@ mkarache-l200/
     - `logging.googleapis.com/spanId`: `{span_id}`
     - `logging.googleapis.com/trace_sampled`: `true`
   - Allows seamless log-to-trace correlation in the Google Cloud Console.
-- **Enterprise PII Redaction via Google Cloud Sensitive Data Protection (SDP / DLP) API:**
-  - Integrated `google.cloud.dlp_v2` (`DlpServiceClient.deidentify_content`) directly inside the trace accumulator.
-  - Automatically detects and scrubs sensitive InfoTypes (`PERSON_NAME`, `EMAIL_ADDRESS`, `PHONE_NUMBER`, `US_SOCIAL_SECURITY_NUMBER`, `CREDIT_CARD_NUMBER`, `PASSPORT`, `AUTH_TOKEN`) using Google Cloud's enterprise ML scanning models.
-  - Recursively scrubs incoming user queries, model responses, and nested tool waterfall payloads before telemetry emission.
-  - Cloud Run Service Account granted `roles/dlp.user` in `infra/main.tf`.
+- **Automated PII Redaction Before Printing:**
+  - Implemented `redact_pii` directly inside the telemetry accumulator, executed right before JSON log emission to stdout.
+  - Detects and replaces emails (`[REDACTED_EMAIL]`), phone numbers (`[REDACTED_PHONE]`), Social Security Numbers (`[REDACTED_SSN]`), credit card numbers (`[REDACTED_CREDIT_CARD]`), and API/bearer keys (`[REDACTED_API_KEY]`).
+  - Recursively sanitizes user queries, model responses, and nested tool waterfall payloads.
 - **ADK Callback & Decorator Interception:**
   - `@traced_tool`: Wraps ADK tools with OpenTelemetry spans (`tracer.start_as_current_span`) and captures execution metrics.
 
