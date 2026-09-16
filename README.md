@@ -53,9 +53,9 @@ flowchart TD
 
 | Evaluation Pillar | AeroEval Implementation |
 | :--- | :--- |
-| **Tool & Interface Design** | 2 focused ADK Python tools (`query_flight_metadata`, `detect_telemetry_anomalies`) with strict type hints, Google docstrings, and robust error handling. Master metadata decoupled from telemetry logs. |
-| **Context & Memory** | Unified `SessionStore` maintaining multi-turn state (`active_drone_id`, `active_test_id`, `active_board_type`). Implements automated **history compaction** and **context truncation** to manage LLM context bloat, and **non-blocking asynchronous Firestore persistence** via FastAPI `BackgroundTasks` (`save_async` / `save_in_background`) to eliminate UI blocking. |
-| **Orchestration & Logic** | Multi-model routing (Gemini 3.8 Flash & Claude Sonnet 4.6 on Vertex AI) with grounded system prompt, strict anti-hallucination guardrails, and autonomous tool calling. |
+| **Tool & Interface Design** | 3 focused ADK Python tools (`query_flight_metadata`, `detect_telemetry_anomalies`, `file_incident_ticket`) with strict type hints, Google docstrings, and robust error handling. Master metadata decoupled from telemetry logs. |
+| **Context & Memory** | Unified `SessionStore` maintaining multi-turn state (`active_drone_id`, `active_test_id`, `active_board_type`, `pending_action`, `filed_tickets`). Implements automated **history compaction** and **context truncation** to manage LLM context bloat, and **non-blocking asynchronous Firestore persistence** via FastAPI `BackgroundTasks` (`save_async` / `save_in_background`) to eliminate UI blocking. |
+| **Orchestration & Logic** | **Collaborative Multi-Agent Architecture** with **Strategic Model Routing** and **Human-in-the-Loop (HITL) Validation Hooks**:<br/>• **`RouterAgent`** (*Google Gemini 3.6 Flash*): Autonomously classifies engineer intent to route queries without requiring manual UI dropdown selection.<br/>• **`AeroEvalAgent`** (*Google Gemini 3.8 Flash*): Dedicated hardware telemetry & anomaly evaluation agent.<br/>• **`DocGenAgent`** (*Anthropic Claude 4.6 Sonnet*): Quality engineering documentation agent adhering strictly to an explicit standard ticket structure with reference example ticket.<br/>• **ADK Human-In-The-Loop (HITL) Hook**: Enforces pre-execution tool interruption on `file_incident_ticket` (`REQUIRES_HUMAN_APPROVAL`), resuming execution only upon human signoff (conversational resume, `/approve-action` API callback, and UI buttons). |
 | **Observability & Tracing** | Standardized health probes (`/healthz`), standard **OpenTelemetry SDK** distributed tracing with W3C-compliant 32-hex `trace_id`, 16-hex `span_id`, parent-child span linking (`parent_span_id`), Google Cloud Trace correlation fields, and automated **regex-based PII redaction** (`[REDACTED_EMAIL]`, `[REDACTED_PHONE]`, `[REDACTED_SSN]`, `[REDACTED_CREDIT_CARD]`, `[REDACTED_API_KEY]`) directly sanitizing telemetry logs right before printing. |
 | **Infrastructure & CI/CD** | Production `Dockerfile` for Cloud Run (GEAP Agent Runtime), Infrastructure as Code via Terraform (`infra/main.tf`), Cloud Storage bucket for datasets, and automated GitHub Actions CI (`.github/workflows/ci.yml`). |
 
@@ -67,16 +67,16 @@ flowchart TD
 .
 ├── backend/                       # Agent logic, tools, and API
 │   ├── __init__.py
-│   ├── tools.py                   # 2 focused ADK tools (metadata query, anomaly detector)
-│   ├── prompt.py                  # Grounded test engineering instructions & guardrails
-│   ├── agent.py                   # Multi-model Vertex AI orchestrator (Gemini 3.8 & Claude 4.6)
+│   ├── tools.py                   # 3 focused ADK tools (metadata query, anomaly detector, ticket filer)
+│   ├── prompt.py                  # Grounded test engineering, DocGen & Router instructions
+│   ├── agent.py                   # Multi-agent orchestrator (Router Gemini 3.6, AeroEval Gemini 3.8, DocGen Claude 4.6)
 │   ├── memory.py                  # Multi-turn session memory, compaction & async Firestore store
 │   ├── telemetry.py               # OpenTelemetry distributed tracing & regex PII redaction
-│   └── main.py                    # FastAPI server exposing /chat with BackgroundTasks
+│   └── main.py                    # FastAPI server exposing /chat and /approve-action
 ├── frontend/                      # Web UI for test engineers
-│   ├── index.html                 # Single-page interface
+│   ├── index.html                 # Single-page interface with strategic routing dropdown
 │   ├── style.css                  # Modern Google-themed styling
-│   └── app.js                     # Turn-by-turn API interaction
+│   └── app.js                     # Turn-by-turn API interaction & interactive HITL buttons
 ├── infra/                         # Infrastructure as Code (Terraform)
 │   ├── main.tf                    # Cloud Run & Firestore definitions
 │   ├── variables.tf               # GCP project and region configuration
@@ -87,7 +87,8 @@ flowchart TD
 │       ├── flight_101.csv         # Nominal baseline flight
 │       ├── flight_102.csv         # Motor vibration anomaly (CB-V2.1-Beta)
 │       └── flight_103.csv         # Battery thermal spike anomaly
-├── tests/                         # Automated test suite
+├── tests/                         # Automated test suite (34 tests, 100% pass)
+│   ├── test_multi_agent.py        # Unit & integration tests for Router, DocGen, and HITL hooks
 │   ├── test_memory.py             # Unit & integration tests for context, compaction & async persistence
 │   ├── test_redaction.py          # Unit tests for regex PII redaction
 │   ├── test_telemetry.py          # Unit tests for OpenTelemetry tracing, span linking & GCP correlation

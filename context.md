@@ -85,14 +85,28 @@ mkarache-l200/
 
 ---
 
-### C. The 2 Focused ADK Python Tools (`backend/tools.py`)
+### C. The 3 Focused ADK Python Tools (`backend/tools.py`)
 1. **`query_flight_metadata(drone_id, board_type, date, registry_path)`**:
    Queries the database / master registry (from Google Cloud Storage `gs://` or local `data/registry.json`) using target hardware constraints (`drone_id`, `board_type`, `date`) and returns matching test IDs and file paths.
 2. **`detect_telemetry_anomalies(file_path, metric, threshold)`**:
    Opens a specific telemetry CSV file (streaming directly from GCS or local disk), computes statistical anomalies (Z-score / IQR) for sensor metrics (e.g. `Motor_Vibration_g`, `Battery_Temp_C`, `Voltage_V`), and returns a concise JSON summary of flagged timestamps and values. Keeps bulky raw data out of the LLM context.
-*(Note: Telemetry datasets can be stored in Google Cloud Storage `gs://onboardingproject-507522-aeroeval-data`, decoupling data storage from container builds).*
+3. **`file_incident_ticket(title, severity, drone_id, board_type, test_id, summary, recommendations, confirmed)`**:
+   Mocks filing an engineering incident ticket into Jira / Buganizer. Strictly enforces an ADK Human-In-The-Loop (HITL) pre-execution gate: if `confirmed=False`, returns a pending draft state (`REQUIRES_HUMAN_APPROVAL`); if `confirmed=True`, registers the ticket (`TICKET_CREATED`) and returns an assigned ticket ID.
 
 ---
+
+### D. Multi-Agent Orchestration & Strategic Model Routing (`backend/agent.py`)
+- **`RouterAgent` (Gemini 3.6 Flash via Vertex AI):**
+  - Autonomously classifies user intent and conversation context without requiring manual dropdown selection.
+  - Classifies queries into `TELEMETRY_EVAL` (AeroEvalAgent) or `DOC_GEN` (DocGenAgent), and detects HITL approvals.
+- **`AeroEvalAgent` (Gemini 3.8 Flash via Vertex AI - Preserved Untouched):**
+  - Dedicated hardware test evaluation agent executing metadata queries and statistical anomaly detection.
+- **`DocGenAgent` (Anthropic Claude 4.6 Sonnet via Vertex AI Model Garden):**
+  - Technical documentation and quality engineering agent synthesizing telemetry findings into standardized incident reports.
+  - System instruction contains an explicit standard ticket template with full reference example ticket.
+- **Human-In-The-Loop (HITL) Validation Hooks:**
+  - Enforces pre-execution review on ticket filing.
+  - Supports conversational resume ("Approve", "Confirm", "Reject") and programmatic API callback (`POST /approve-action`).
 
 ### D. Context & Multi-Turn Memory Architecture (`backend/memory.py`)
 - **Unified SessionStore & Backwards Compatibility:** `SessionStore` merges session state modeling and storage management into a single class with `SessionState = SessionStore` alias for full backwards compatibility.

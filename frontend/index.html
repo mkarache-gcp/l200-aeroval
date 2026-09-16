@@ -16,10 +16,11 @@
         <h1>🛰️ AeroEval</h1>
       </div>
       <div class="header-actions">
-        <label for="provider-select" class="provider-label">Model:</label>
+        <label for="provider-select" class="provider-label">Routing:</label>
         <select id="provider-select" class="provider-dropdown">
-          <option value="gemini">Gemini 3.8 Flash</option>
-          <option value="anthropic">Claude Sonnet 4.7</option>
+          <option value="auto" selected>Auto (Strategic Routing)</option>
+          <option value="gemini">AeroEval Agent (Gemini 3.8 Flash)</option>
+          <option value="anthropic">DocGen Agent (Claude 4.6 Sonnet)</option>
         </select>
       </div>
     </header>

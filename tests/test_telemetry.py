@@ -141,3 +141,48 @@ class TestOpenTelemetryTracing:
         assert tool_calls[0]["span_id"] == tool_responses[0]["span_id"]
         assert tool_calls[0]["parent_span_id"] == collector.span_id
 
+    def test_agent_name_and_router_classification_in_telemetry(self, capsys):
+        """Verifies agent_name is initiated/logged and router classification appears in waterfall & top-level."""
+        collector = TraceCollector(
+            session_id="multi-agent-trace-session",
+            model_name="gemini-3.6-flash",
+            user_query="Generate report for AeroX-2",
+            agent_name="RouterAgent",
+        )
+
+        assert collector.agent_name == "RouterAgent"
+
+        # Record router agent decision
+        routing_info = {
+            "target_agent": "DOC_GEN",
+            "reasoning": "User requested incident report and ticket drafting",
+            "is_hitl_approval": False,
+        }
+        router_span_id = collector.on_routing(routing_info, router_model="gemini-3.6-flash")
+
+        assert len(router_span_id) == 16
+        assert len(collector.trace_waterfall) == 1
+        router_step = collector.trace_waterfall[0]
+        assert router_step["step_type"] == "router_classification"
+        assert router_step["payload"]["target_agent"] == "DOC_GEN"
+        assert router_step["payload"]["router_model"] == "gemini-3.6-flash"
+
+        # Switch active agent to DocGenAgent and emit
+        collector.agent_name = "DocGenAgent"
+        collector.model_name = "claude-4-6-sonnet"
+        log_data = collector.emit("Incident report drafted.")
+
+        captured = capsys.readouterr()
+        printed = json.loads(captured.out)
+
+        # Validate agent_name in top-level log
+        assert printed["agent_name"] == "DocGenAgent"
+        assert printed["model_name"] == "claude-4-6-sonnet"
+
+        # Validate router results in top-level log and waterfall
+        assert "routing" in printed
+        assert printed["routing"]["target_agent"] == "DOC_GEN"
+        assert len(printed["trace_waterfall"]) == 1
+        assert printed["trace_waterfall"][0]["step_type"] == "router_classification"
+        assert printed["trace_waterfall"][0]["payload"]["router_agent"] == "RouterAgent"
+

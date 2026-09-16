@@ -47,6 +47,8 @@ class SessionStore:
         active_test_id: Optional[str] = None,
         last_file_path: Optional[str] = None,
         history: Optional[List[Dict[str, str]]] = None,
+        pending_action: Optional[Dict[str, Any]] = None,
+        filed_tickets: Optional[List[Dict[str, Any]]] = None,
         max_turns: int = MAX_HISTORY_TURNS,
         retain_recent: int = RETAIN_RECENT_TURNS,
     ):
@@ -56,6 +58,8 @@ class SessionStore:
         self.active_test_id = active_test_id
         self.last_file_path = last_file_path
         self.history: List[Dict[str, str]] = list(history) if history is not None else []
+        self.pending_action: Optional[Dict[str, Any]] = pending_action
+        self.filed_tickets: List[Dict[str, Any]] = list(filed_tickets) if filed_tickets is not None else []
         self.max_turns = max_turns
         self.retain_recent = retain_recent
 
@@ -266,6 +270,34 @@ class SessionStore:
         return messages
 
     # -------------------------------------------------------------------------
+    # Human-In-The-Loop (HITL) Action State Management
+    # -------------------------------------------------------------------------
+
+    def set_pending_action(self, action_type: str, draft: Dict[str, Any], draft_id: Optional[str] = None) -> str:
+        """Stores a pending high-stakes action awaiting human approval."""
+        assigned_id = draft_id or f"DRAFT-{action_type.upper()}-{len(self.filed_tickets) + 1}"
+        self.pending_action = {
+            "draft_id": assigned_id,
+            "action_type": action_type,
+            "draft": draft,
+            "status": "REQUIRES_HUMAN_APPROVAL",
+        }
+        return assigned_id
+
+    def get_pending_action(self) -> Optional[Dict[str, Any]]:
+        """Returns current pending action requiring human signoff if present."""
+        return self.pending_action
+
+    def clear_pending_action(self) -> None:
+        """Clears active pending action after human approval or rejection."""
+        self.pending_action = None
+
+    def record_filed_ticket(self, ticket: Dict[str, Any]) -> None:
+        """Appends an approved and filed ticket into the session record."""
+        self.filed_tickets.append(ticket)
+        self.clear_pending_action()
+
+    # -------------------------------------------------------------------------
     # Serialization
     # -------------------------------------------------------------------------
 
@@ -278,6 +310,8 @@ class SessionStore:
             "active_test_id": self.active_test_id,
             "last_file_path": self.last_file_path,
             "history": self.history,
+            "pending_action": self.pending_action,
+            "filed_tickets": self.filed_tickets,
         }
 
     @classmethod
@@ -290,6 +324,8 @@ class SessionStore:
             active_test_id=data.get("active_test_id"),
             last_file_path=data.get("last_file_path"),
             history=data.get("history", []),
+            pending_action=data.get("pending_action"),
+            filed_tickets=data.get("filed_tickets", []),
         )
 
     # -------------------------------------------------------------------------

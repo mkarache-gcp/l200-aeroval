@@ -236,6 +236,91 @@ def detect_telemetry_anomalies(
         return {"error": f"Failed to compute anomalies: {str(e)}"}
 
 
+from datetime import datetime, timezone
+import random
+
+
+@traced_tool
+def file_incident_ticket(
+    title: str,
+    severity: str,
+    drone_id: str,
+    board_type: str,
+    test_id: str,
+    summary: str,
+    recommendations: str,
+    metric_details: Optional[str] = None,
+    confirmed: bool = False,
+    draft_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mocks filing an engineering incident/bug ticket into the issue tracker (e.g. Jira / Buganizer).
+
+    HUMAN-IN-THE-LOOP (HITL) GUARDRAIL:
+    Requires explicit human approval before officially creating the ticket.
+    - If `confirmed=False`: Generates a pending draft and pauses execution for human review.
+    - If `confirmed=True`: Officially creates and registers the ticket in the engineering backlog.
+
+    Args:
+        title: Standardized incident title (e.g., '[INCIDENT] AeroX-2 - flight_102: Motor vibration anomalies').
+        severity: Issue severity ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW').
+        drone_id: Identified drone airframe model (e.g., 'AeroX-2').
+        board_type: Circuit board version (e.g., 'CB-V2.1-Beta').
+        test_id: Test flight identifier (e.g., 'flight_102').
+        summary: Executive summary of observed telemetry anomalies and test findings.
+        recommendations: Concrete engineering corrective actions.
+        metric_details: Optional details on Z-score deviations and sensor metrics.
+        confirmed: Set to True ONLY after explicit human signoff has been received.
+        draft_id: Optional existing draft ID being confirmed.
+
+    Returns:
+        A dictionary containing the ticket status ('REQUIRES_HUMAN_APPROVAL' or 'TICKET_CREATED'),
+        assigned ticket ID (if confirmed), and complete ticket details.
+    """
+    assigned_draft_id = draft_id or f"DRAFT-AERO-{random.randint(1000, 9999)}"
+
+    # 1. Pre-execution HITL Gate: If not explicitly confirmed, return pending draft state
+    if not confirmed:
+        return {
+            "status": "REQUIRES_HUMAN_APPROVAL",
+            "action": "file_incident_ticket",
+            "draft_id": assigned_draft_id,
+            "message": (
+                f"Incident ticket draft generated. Human-in-the-loop signoff is required before "
+                f"submitting to the issue tracker. Please review the details and confirm filing."
+            ),
+            "draft": {
+                "title": title,
+                "severity": severity.upper(),
+                "drone_id": drone_id,
+                "board_type": board_type,
+                "test_id": test_id,
+                "summary": summary,
+                "recommendations": recommendations,
+                "metric_details": metric_details,
+            },
+        }
+
+    # 2. Execution after Human Signoff
+    ticket_id = f"AERO-{random.randint(1000, 9999)}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "status": "TICKET_CREATED",
+        "ticket_id": ticket_id,
+        "draft_id": assigned_draft_id,
+        "title": title,
+        "severity": severity.upper(),
+        "drone_id": drone_id,
+        "board_type": board_type,
+        "test_id": test_id,
+        "message": f"Successfully filed incident ticket {ticket_id} with human signoff.",
+        "created_at": now_iso,
+        "summary": summary,
+        "recommendations": recommendations,
+        "metric_details": metric_details,
+    }
+
+
 # Backward compatibility aliases
 filter_flight_metadata = query_flight_metadata
 calculate_telemetry_anomalies = detect_telemetry_anomalies

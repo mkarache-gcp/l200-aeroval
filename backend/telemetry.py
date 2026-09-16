@@ -130,14 +130,17 @@ class TraceCollector:
         session_id: str,
         model_name: str,
         user_query: str,
+        agent_name: Optional[str] = "AeroEvalAgent",
         trace_id: Optional[str] = None,
         span_id: Optional[str] = None,
         parent_span_id: Optional[str] = None,
     ):
         self.start_time = time.time()
         self.session_id = session_id
+        self.agent_name = agent_name or "AeroEvalAgent"
         self.model_name = model_name
         self.user_query = user_query
+        self.routing_info: Optional[Dict[str, Any]] = None
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("PROJECT_ID", "onboardingproject-507522")
 
         # OpenTelemetry & W3C Trace Context identifiers
@@ -145,6 +148,26 @@ class TraceCollector:
         self.span_id = span_id or generate_span_id()
         self.parent_span_id = parent_span_id
         self.trace_waterfall: List[Dict[str, Any]] = []
+
+    def on_routing(self, routing_info: Dict[str, Any], router_model: str) -> str:
+        """Records the router agent's classification and decision as an OpenTelemetry child span."""
+        child_span_id = generate_span_id()
+        self.routing_info = routing_info
+        self.trace_waterfall.append({
+            "trace_id": self.trace_id,
+            "span_id": child_span_id,
+            "parent_span_id": self.span_id,
+            "timestamp": round(time.time(), 3),
+            "step_type": "router_classification",
+            "payload": {
+                "router_agent": "RouterAgent",
+                "router_model": router_model,
+                "target_agent": routing_info.get("target_agent"),
+                "reasoning": routing_info.get("reasoning"),
+                "is_hitl_approval": routing_info.get("is_hitl_approval", False),
+            },
+        })
+        return child_span_id
 
     def on_thought(self, thought: str, thought_span_id: Optional[str] = None) -> str:
         """Records an agent reasoning thought as an OpenTelemetry child span linked to root span."""
@@ -230,9 +253,11 @@ class TraceCollector:
             "logging.googleapis.com/trace": f"projects/{self.project_id}/traces/{self.trace_id}",
             "logging.googleapis.com/spanId": self.span_id,
             "logging.googleapis.com/trace_sampled": True,
-            # Session & Query Context
+            # Session, Multi-Agent & Query Context
             "session_id": self.session_id,
+            "agent_name": self.agent_name,
             "model_name": self.model_name,
+            "routing": self.routing_info,
             "user_query": self.user_query,
             "agent_response": agent_response,
             "metrics": {
@@ -260,6 +285,7 @@ class TelemetryLogger:
         session_id: str,
         model_name: str,
         user_query: str,
+        agent_name: Optional[str] = "AeroEvalAgent",
         trace_id: Optional[str] = None,
     ) -> TraceCollector:
         """Starts a root trace span for a conversation turn."""
@@ -269,6 +295,7 @@ class TelemetryLogger:
             session_id=session_id,
             model_name=model_name,
             user_query=user_query,
+            agent_name=agent_name,
             trace_id=tid,
             span_id=sid,
         )
